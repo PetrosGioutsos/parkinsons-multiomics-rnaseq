@@ -1,5 +1,199 @@
 ---
-title: "01_virtual_pulldown"
+title: "Virtual Pulldown"
 format: html
 ---
+
+Library Loading
+```{r}
+library(igraph)
+library(ggraph)
+library(msigdbr)
+library(fgsea)
+
+# Load the InWeb PPI database.
+load(file='/home/projects/22140/exercise4.Rdata')
+```
+
+
+
+Set of proteins involved in Parkinson's Disease (PD).
+```{r}
+
+seeds <- c('PRKN', 'PINK1', 'LRRK2', 'VPS35', 'RAB32', 'GBA1', 'MAPT', 'SNCA', 'HLA-DRA', 'NR4A2', 'PARK7')
+```
+
+
+Extracting all connections with a confidence score >= 0.2
+```{r}
+connections_df <- inWeb[inWeb$inweb_cs >= 0.2,
+                        c("from", "to", "inweb_cs")]
+
+# Creating the graph with the data
+g <- graph_from_data_frame(connections_df, directed = FALSE)
+plot(g)
+```
+
+Virtual pulldown is performed in two steps: first, we extract the sub-graph, and then we filter the virtual pulldown.
+
+Using the ego() function we can extract all the first degree neighbors.
+```{r}
+seed_neigbors <- ego(
+  graph = g,
+  order = 1,
+  nodes = V(g)[name %in% seeds],
+  mode = "all"
+)
+```
+
+as_ids() is used to convert each vertex sequence into a regular vector of IDs, and unlist() flattens the list of vectors into a single vector containing all neigbors of all seeds.
+```{r}
+sub_nodes_names <- unique(unlist(lapply(seed_neigbors, as_ids)))
+```
+
+
+The subnetwork based on a set of node ids is extracted.
+```{r}
+g_sub <- induced_subgraph(g, vids = V(g)[name %in% sub_nodes_names])
+```
+
+
+Filtering the virtual pulldown.
+```{r}
+filter_virtual_pulldown <- function(subGraph, parentGraph, cutoff) {
+  if (is.null(V(subGraph)$name) || is.null(V(parentGraph)$name))
+    stop("both graphs must have vertex 'name attributes.")
+  
+  mode <- "all"
+  
+  vn <- V(subGraph)$name
+  
+  # Degree in the full graph.
+  deg_full <- degree(parentGraph, v = vn, mode = mode)
+  
+  # Degree inside the subgraph.
+  deg_internal <- degree(subGraph, mode = mode)
+  
+  res <- data.frame(
+    node = vn,
+    deg_internal = deg_internal,
+    deg_full = deg_full,
+    frac_internal = ifelse(deg_full > 0, deg_internal / deg_full, NA_real_),
+    stringsAsFactors = FALSE
+  )
+    
+  # Keep nodes that pass the cutoff.
+  nodes_to_keep <- res$node[!is.na(res$frac_internal) & res$frac_internal >= cutoff]
+  
+  # A new subgraph contains the nodes that meet the criteria.
+  filteredSubGraph <- induced_subgraph(subGraph, vids = V(subGraph)[name %in% nodes_to_keep])
+
+  V(filteredSubGraph)$frac_internal <- res$frac_internal[match(V(filteredSubGraph)$name, res$node)]
+  
+  filteredSubGraph
+  
+}
+```
+
+
+
+
+```{r}
+cuts <- c(0, 0.2, 0.5, 1)
+# function to check the size of the network
+net_size <- function(g) c(nodes = vcount(g), edges = ecount(g))
+# run the filtering function and collect sizes
+filtered <- lapply(cuts, function(ct) filter_virtual_pulldown(g_sub, g, cutoff = ct))
+
+sizes <- t(sapply(filtered, net_size))
+rownames(sizes) <- paste0("cutoff_", cuts)
+sizes
+```
+
+A 0.2 cutoff is applied to extract the first degree neighbors; after the 0.2 cutoff, we are only left with few proteins, resulting in a much less informative plot to further extract potential subclusters.
+We are only keeping the nodes whose 20% or more of the total connections lie inside the subgraph.
+
+Visualizing the network
+```{r}
+g_filt <- filter_virtual_pulldown(g_sub, g, 0.2)
+
+is_seed <- V(g_filt)$name %in% seeds
+V(g_filt)$role <- ifelse(is_seed, "seed", "neighbor")
+
+ggraph(g_filt, layout = "fr") + 
+  geom_edge_link() + 
+  geom_node_point(aes(color = role))
+```
+
+
+Finding potential subclusers 
+```{r}
+cl <- cluster_louvain(g_filt, weights = NULL, resolution = 0.4)
+
+V(g_filt)$cluster <- factor(membership(cl))
+
+ggraph(g_filt, layout = "fr") + 
+  geom_edge_link() + 
+  geom_node_point(aes(color = cluster))
+```
+
+
+```{r}
+n_clusters <- sort(table(V(g_filt)$cluster), decreasing = TRUE)
+n_clusters
+```
+
+All nodes of the network will be the universe for the overrepesentation analysis.
+```{r}
+BP_df = msigdbr(species = "human", category = "C5", subcategory = "BP")
+
+BP_list = split(x = BP_df$gene_symbol, f = BP_df$gs_name)
+background <- V(g_filt)$name
+```
+
+
+ORA for cluster 1 (n = 251 genes)
+```{r}
+target <- V(g_filt)$name[V(g_filt)$cluster == 1]
+
+BP_gsea <- fora(BP_list, target, background)
+
+top10_bp <- head(BP_gsea[order(BP_gsea$padj, BP_gsea$pval), ], 10)
+print(as.data.frame(top10_bp), row.names = FALSE, right = FALSE)
+```
+
+ORA for cluster 2 (n = 99 genes)
+```{r}
+target <- V(g_filt)$name[V(g_filt)$cluster == 2]
+
+BP_gsea <- fora(BP_list, target, background)
+
+top10_bp <- head(BP_gsea[order(BP_gsea$padj, BP_gsea$pval), ], 10)
+print(as.data.frame(top10_bp), row.names = FALSE, right = FALSE)
+```
+
+
+ORA for cluster 3 (n = 12 genes)
+```{r}
+target <- V(g_filt)$name[V(g_filt)$cluster == 3]
+
+BP_gsea <- fora(BP_list, target, background)
+
+top10_bp <- head(BP_gsea[order(BP_gsea$padj, BP_gsea$pval), ], 10)
+print(as.data.frame(top10_bp), row.names = FALSE, right = FALSE)
+```
+
+
+Gene with the highest betweenness centrality
+
+```{r}
+largest_cluster <- 1
+
+g_largest <- induced_subgraph(g_filt, vids = V(g_filt)[cluster == largest_cluster])
+
+bw <- betweenness(g_largest, directed = FALSE, normalized = TRUE)
+bw_max <- max(bw, na.rm = TRUE)
+top_gene <- names(bw)[bw == bw_max]
+top_gene
+```
+
 
