@@ -15,10 +15,9 @@ load(file='/home/projects/22140/exercise4.Rdata')
 ```
 
 
-
 Set of proteins involved in Parkinson's Disease (PD).
 ```{r}
-
+# Proteins found to be involved by manually curating literature
 seeds <- c('PRKN', 'PINK1', 'LRRK2', 'VPS35', 'RAB32', 'GBA1', 'MAPT', 'SNCA', 'HLA-DRA', 'NR4A2', 'PARK7')
 ```
 
@@ -30,7 +29,6 @@ connections_df <- inWeb[inWeb$inweb_cs >= 0.2,
 
 # Creating the graph with the data
 g <- graph_from_data_frame(connections_df, directed = FALSE)
-plot(g)
 ```
 
 Virtual pulldown is performed in two steps: first, we extract the sub-graph, and then we filter the virtual pulldown.
@@ -45,7 +43,7 @@ seed_neigbors <- ego(
 )
 ```
 
-as_ids() is used to convert each vertex sequence into a regular vector of IDs, and unlist() flattens the list of vectors into a single vector containing all neigbors of all seeds.
+as_ids() is used to convert each vertex sequence into a regular vector of IDs, and unlist() flattens the list of vectors into a single vector containing all neighbors of all seeds.
 ```{r}
 sub_nodes_names <- unique(unlist(lapply(seed_neigbors, as_ids)))
 ```
@@ -88,9 +86,7 @@ filter_virtual_pulldown <- function(subGraph, parentGraph, cutoff) {
   filteredSubGraph <- induced_subgraph(subGraph, vids = V(subGraph)[name %in% nodes_to_keep])
 
   V(filteredSubGraph)$frac_internal <- res$frac_internal[match(V(filteredSubGraph)$name, res$node)]
-  
   filteredSubGraph
-  
 }
 ```
 
@@ -119,9 +115,10 @@ g_filt <- filter_virtual_pulldown(g_sub, g, 0.2)
 is_seed <- V(g_filt)$name %in% seeds
 V(g_filt)$role <- ifelse(is_seed, "seed", "neighbor")
 
-ggraph(g_filt, layout = "fr") + 
+p_role <- ggraph(g_filt, layout = "fr") + 
   geom_edge_link() + 
   geom_node_point(aes(color = role))
+p_role
 ```
 
 
@@ -131,15 +128,15 @@ cl <- cluster_louvain(g_filt, weights = NULL, resolution = 0.4)
 
 V(g_filt)$cluster <- factor(membership(cl))
 
-ggraph(g_filt, layout = "fr") + 
+p_cluster <- ggraph(g_filt, layout = "fr") + 
   geom_edge_link() + 
   geom_node_point(aes(color = cluster))
+p_cluster
 ```
 
 
 ```{r}
 n_clusters <- sort(table(V(g_filt)$cluster), decreasing = TRUE)
-n_clusters
 ```
 
 All nodes of the network will be the universe for the overrepesentation analysis.
@@ -157,8 +154,8 @@ target <- V(g_filt)$name[V(g_filt)$cluster == 1]
 
 BP_gsea <- fora(BP_list, target, background)
 
-top10_bp <- head(BP_gsea[order(BP_gsea$padj, BP_gsea$pval), ], 10)
-print(as.data.frame(top10_bp), row.names = FALSE, right = FALSE)
+top10_bp_c1 <- head(BP_gsea[order(BP_gsea$padj, BP_gsea$pval), ], 10)
+print(as.data.frame(top10_bp_c1), row.names = FALSE, right = FALSE)
 ```
 
 ORA for cluster 2 (n = 99 genes)
@@ -167,10 +164,9 @@ target <- V(g_filt)$name[V(g_filt)$cluster == 2]
 
 BP_gsea <- fora(BP_list, target, background)
 
-top10_bp <- head(BP_gsea[order(BP_gsea$padj, BP_gsea$pval), ], 10)
-print(as.data.frame(top10_bp), row.names = FALSE, right = FALSE)
+top10_bp_c2 <- head(BP_gsea[order(BP_gsea$padj, BP_gsea$pval), ], 10)
+print(as.data.frame(top10_bp_c2), row.names = FALSE, right = FALSE)
 ```
-
 
 ORA for cluster 3 (n = 12 genes)
 ```{r}
@@ -178,18 +174,15 @@ target <- V(g_filt)$name[V(g_filt)$cluster == 3]
 
 BP_gsea <- fora(BP_list, target, background)
 
-top10_bp <- head(BP_gsea[order(BP_gsea$padj, BP_gsea$pval), ], 10)
-print(as.data.frame(top10_bp), row.names = FALSE, right = FALSE)
+top10_bp_c3 <- head(BP_gsea[order(BP_gsea$padj, BP_gsea$pval), ], 10)
+print(as.data.frame(top10_bp_c3), row.names = FALSE, right = FALSE)
 ```
 
-
 Gene with the highest betweenness centrality
-
 ```{r}
 largest_cluster <- 1
 
-g_largest <- induced_subgraph(g_filt, vids = V(g_filt)[cluster == largest_cluster])
-
+g_largest <- induced_subgraph(g_filt, vids = V(g_filt)[V(g_filt)$cluster == largest_cluster])
 bw <- betweenness(g_largest, directed = FALSE, normalized = TRUE)
 bw_max <- max(bw, na.rm = TRUE)
 top_gene <- names(bw)[bw == bw_max]
@@ -197,3 +190,50 @@ top_gene
 ```
 
 
+## Saving all plots and tables to `results/`
+
+```{r}
+results_dir <- "../results"
+dir.create(results_dir, showWarnings = FALSE, recursive = TRUE)
+options(bitmapType = "cairo")
+
+# fora() output has a list-column (overlapGenes) that write.csv() can't
+# handle directly. List columns are flattened to ";"-joined strings first.
+flatten_list_cols <- function(df) {
+  df[] <- lapply(df, function(col) {
+    if (is.list(col)) vapply(col, paste, character(1), collapse = ";") else col
+  })
+  df
+}
+```
+
+
+```{r}
+write.csv(sizes, file.path(results_dir, "01_network_sizes_by_cutoff.csv"), row.names = TRUE)
+```
+
+```{r}
+ggsave(file.path(results_dir, "02_network_by_role.png"), plot = p_role, width = 8, height = 6, dpi = 300)
+```
+
+```{r}
+ggsave(file.path(results_dir, "03_network_by_cluster.png"), plot = p_cluster, width = 8, height = 6, dpi = 300)
+```
+
+```{r}
+write.csv(as.data.frame(n_clusters), file.path(results_dir, "04_cluster_sizes.csv"), row.names = FALSE)
+```
+
+```{r}
+write.csv(flatten_list_cols(as.data.frame(top10_bp_c1)),
+          file.path(results_dir, "05_ORA_cluster1_top10.csv"), row.names = FALSE)
+write.csv(flatten_list_cols(as.data.frame(top10_bp_c2)),
+          file.path(results_dir, "06_ORA_cluster2_top10.csv"), row.names = FALSE)
+write.csv(flatten_list_cols(as.data.frame(top10_bp_c3)),
+          file.path(results_dir, "07_ORA_cluster3_top10.csv"), row.names = FALSE)
+```
+
+```{r}
+write.csv(data.frame(gene = top_gene, betweenness = bw_max),
+          file.path(results_dir, "08_top_betweenness_gene.csv"), row.names = FALSE)
+```
