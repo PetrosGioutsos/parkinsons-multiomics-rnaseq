@@ -4,6 +4,9 @@ format: html
 ---
 
 
+Loading inWeb PPI database
+```{r}
+# Load the InWeb PPI database.
+load(file='/home/projects/22140/exercise4.Rdata')
+```
 
-
-# Pending add code chunk for loading inWeb PPI database (Petros)
