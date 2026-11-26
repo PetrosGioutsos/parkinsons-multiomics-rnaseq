@@ -55,13 +55,14 @@ parse_geo_meta <- function(url, destfile) {
   df
 }
 
+dir.create("../data/_raw", showWarning = FALSE, recursive = TRUE)
 meta_90514_raw <- parse_geo_meta(
   "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE90nnn/GSE90514/matrix/GSE90514_series_matrix.txt.gz",
-  "GSE90514_series_matrix.txt.gz"
+  "../data/_raw/GSE90514_series_matrix.txt.gz"
 )
 
 # B. GSE167529 (SOFT file — combines all platforms/batches in one file)
-soft_file <- "GSE167529_family.soft.gz"
+soft_file <- "../data/_raw/GSE167529_family.soft.gz"
 if (!file.exists(soft_file)) {
   download.file(
     url = "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE167nnn/GSE167529/soft/GSE167529_family.soft.gz",
@@ -161,7 +162,7 @@ iso_167529_25mM   <- iso_167529[, rownames(meta_167529_25mM)]
 # ------------------------------------------------------------------------------
 # 5. Save clean .rds files to shared group_4/data folder
 # ------------------------------------------------------------------------------
-data_dir <- "/home/projects/exam_2026_22140_22150/group_4/data"
+data_dir <- "../data/"
 
 saveRDS(gene_90514,        file.path(data_dir, "GSE90514_gene_counts.rds"))
 saveRDS(iso_90514_aligned, file.path(data_dir, "GSE90514_iso_counts.rds"))
