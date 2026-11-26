@@ -10,10 +10,11 @@ Loading inWeb PPI database
 # Load the InWeb PPI database.
 load(file='/home/projects/22140/exercise4.Rdata')
 ```
+# --------------------------------------------------
 
 
 
-
+# ------ Differential Gene Expression ---------------
 
 ```{r}
 # ==============================================================================
@@ -176,6 +177,47 @@ saveRDS(meta_167529,       file.path(data_dir, "GSE167529_all42_meta.rds"))
 
 list.files(data_dir)
 ```
+
+# ---------------------------------------------------
+
+
+
+
+
+
+# -------- Differential Isoform Usage ---------------
+
+Paths are relative to this file (the `R/` folder).
+```{r}
+data_dir    <- "../data/"
+results_dir <- "../results"
+dir.create(results_dir, showWarnings = FALSE, recursive = TRUE)
+```
+
+Isoform counts and metadata for both datasets. GSE167529 uses the 25 mM glucose samples only (21 samples, one per donor).
+```{r}
+iso_prkn   <- readRDS(paste0(data_dir, "GSE90514_iso_counts.rds"))
+meta_prkn  <- readRDS(paste0(data_dir, "GSE90514_meta.rds"))
+iso_lrrk2  <- readRDS(paste0(data_dir, "GSE167529_25mM_iso_counts.rds"))
+meta_lrrk2 <- readRDS(paste0(data_dir, "GSE167529_25mM_meta.rds"))
+```
+
+Isoform annotation (links each transcript to its gene). This file is not in the repo, so it keeps its full path on the server.
+```{r}
+isoInfo <- read_rds("/home/projects/22140/exam_data/Homo_sapiens.GRCh38.107.chr_patch_hapl_scaff_tx_info.Rds")
+```
+
+
+```{r}
+prkn_file <- file.path(results_dir, "03_GSE90514_dexseq.rds")
+lrrk2_file <- file.path(results_dir, "03_GSE167529_dexseq.rds")
+```
+
+----------------------------------------------------
+
+
+
+
 
 
 
