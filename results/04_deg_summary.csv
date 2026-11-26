@@ -1,5 +1,5 @@
-"dataset","model","total_deg","up_PD","down_PD","lfc_gt_1"
-"GSE90514","Unadjusted (~ condition)",964,532,432,646
-"GSE90514","Adjusted (~ gender + condition)",925,502,423,639
-"GSE167529_25mM","Unadjusted (~ condition)",22,18,4,19
-"GSE167529_25mM","Adjusted (~ batch + gender + age_scaled + condition)",39,23,16,24
+"Model","DEGs","Up","Down","DEGs_absLFC1"
+"GSE90514 ~ condition",964,532,432,646
+"GSE90514 ~ gender + condition",925,502,423,639
+"GSE167529 ~ condition",22,18,4,19
+"GSE167529 ~ batch + gender + age + condition",39,23,16,24

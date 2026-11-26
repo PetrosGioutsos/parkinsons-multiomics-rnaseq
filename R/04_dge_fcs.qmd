@@ -1,0 +1,389 @@
+---
+title: "Task 2: Quality control, differential gene expression (DESeq2) and FCS (Week 5)"
+format: html
+---
+
+Library loading
+```{r}
+library(tidyverse)
+library(DESeq2)
+library(fgsea)
+library(msigdbr)
+```
+
+Paths are relative to this file (the `R/` folder).
+```{r}
+data_dir    <- "../data/"
+results_dir <- "../results"
+dir.create(results_dir, showWarnings = FALSE, recursive = TRUE)
+alpha <- 0.05
+```
+
+## Load data
+
+Gene counts and metadata. GSE167529 uses the 25 mM glucose samples only (21 samples, one per donor); the full 42-sample metadata is only used to show the glucose design. Age (age at donation, Table 2 of PMC8636510) is already in the GSE167529 metadata. GSE90514 has no age information. Note: donor FOX-073-001 is male in the GEO metadata but female in Table 2 of the paper; the GEO value is used here.
+```{r}
+gene_90514       <- readRDS(paste0(data_dir, "GSE90514_gene_counts.rds"))
+meta_90514       <- readRDS(paste0(data_dir, "GSE90514_meta.rds"))
+
+gene_167529_25mM <- readRDS(paste0(data_dir, "GSE167529_25mM_gene_counts.rds"))
+meta_167529_25mM <- readRDS(paste0(data_dir, "GSE167529_25mM_meta.rds"))
+meta_167529      <- readRDS(paste0(data_dir, "GSE167529_all42_meta.rds"))
+```
+
+Convert the design variables to factors, and check that the sample order is the same in the counts and the metadata (Week 5).
+```{r}
+meta_90514$condition <- factor(meta_90514$condition, levels = c("Control", "PD"))
+meta_90514$gender    <- factor(meta_90514$gender)
+
+meta_167529_25mM$condition <- factor(meta_167529_25mM$condition, levels = c("Control", "PD"))
+meta_167529_25mM[c("gender", "batch", "run", "age_group")] <-
+  lapply(meta_167529_25mM[c("gender", "batch", "run", "age_group")], factor)
+
+all(rownames(meta_90514) == colnames(gene_90514))               # must be TRUE
+all(rownames(meta_167529_25mM) == colnames(gene_167529_25mM))   # must be TRUE
+```
+
+## Design balance and confounder checks
+
+GSE90514: condition x gender.
+```{r}
+table(meta_90514$condition, meta_90514$gender)
+```
+
+GSE167529, all 42 samples: glucose x condition / batch / sequencing run.
+```{r}
+table(meta_167529$glucose, meta_167529$condition)
+table(meta_167529$glucose, meta_167529$batch)
+table(meta_167529$glucose, meta_167529$run)
+```
+
+GSE167529, 25 mM only: is any confounder unbalanced between PD and Control?
+```{r}
+table(meta_167529_25mM$condition, meta_167529_25mM$gender)
+table(meta_167529_25mM$condition, meta_167529_25mM$batch)
+table(meta_167529_25mM$condition, meta_167529_25mM$run)
+table(meta_167529_25mM$condition, meta_167529_25mM$age_group)
+tapply(meta_167529_25mM$age, meta_167529_25mM$condition, summary)
+```
+
+## Library sizes
+
+Total read counts per sample, in millions.
+```{r}
+round(colSums(gene_90514) / 1e6, 2)
+summary(round(colSums(gene_167529_25mM) / 1e6, 2))
+```
+
+## Low-count filtering
+
+Keep genes with at least 10 reads in at least as many samples as the smallest group has (4 for GSE90514, 9 for GSE167529). This is the same filter as in the DIU analysis (task 3).
+```{r}
+gene_90514_filt  <- round(gene_90514[rowSums(gene_90514 >= 10) >= 4, ])
+gene_167529_filt <- round(gene_167529_25mM[rowSums(gene_167529_25mM >= 10) >= 9, ])
+
+nrow(gene_90514_filt)
+nrow(gene_167529_filt)
+```
+
+## Gene sets and gene names
+
+GO:BP gene sets (Week 5). If msigdbr gives the error "unused argument collection", the server has an older msigdbr version: then use `category = "C5", subcategory = "GO:BP"`. The same table is used to add gene symbols to the result tables.
+```{r}
+BP_df   <- msigdbr(species = "Homo sapiens", category = "C5", subcategory = "GO:BP")
+BP_list <- split(BP_df$ensembl_gene, BP_df$gs_name)
+
+id_map  <- BP_df %>% distinct(ensembl_gene, gene_symbol) %>% filter(!duplicated(ensembl_gene))
+ens2sym <- setNames(id_map$gene_symbol, id_map$ensembl_gene)
+```
+
+Helper to turn a DESeq2 result into a table with gene IDs (Ensembl version removed) and symbols.
+```{r}
+res_to_df <- function(res) {
+  df <- as.data.frame(res)
+  df$gene_id <- sub("\\.\\d+$", "", rownames(df))
+  df$symbol  <- unname(ens2sym[df$gene_id])
+  df
+}
+```
+
+## Dataset 1: PRKN (GSE90514)
+
+### PCA quality check (Week 5: rlog + plotPCA)
+```{r}
+dds_pca_90514 <- DESeqDataSetFromMatrix(countData = round(gene_90514),
+                                        colData   = meta_90514,
+                                        design    = ~ condition)
+rld_90514 <- rlog(dds_pca_90514)
+
+p1_90514 <- plotPCA(rld_90514, intgroup = c("condition")) +
+  ggtitle("GSE90514 PCA: condition")
+p2_90514 <- plotPCA(rld_90514, intgroup = c("condition", "gender")) +
+  ggtitle("GSE90514 PCA: condition + gender")
+
+p1_90514
+p2_90514
+```
+
+### DESeq2 without and with gender (Week 5)
+```{r}
+dds_90514 <- DESeqDataSetFromMatrix(countData = gene_90514_filt,
+                                    colData   = meta_90514,
+                                    design    = ~ condition)
+dds_90514 <- DESeq(dds_90514)
+res_90514 <- res_to_df(results(dds_90514, contrast = c("condition", "PD", "Control")))
+
+dds_90514_gender <- DESeqDataSetFromMatrix(countData = gene_90514_filt,
+                                           colData   = meta_90514,
+                                           design    = ~ gender + condition)
+dds_90514_gender <- DESeq(dds_90514_gender)
+res_90514_gender <- res_to_df(results(dds_90514_gender, contrast = c("condition", "PD", "Control")))
+```
+
+How many genes are significant, and how many are found by both models?
+```{r}
+signif_90514        <- res_90514$gene_id[!is.na(res_90514$padj) & res_90514$padj < alpha]
+signif_90514_gender <- res_90514_gender$gene_id[!is.na(res_90514_gender$padj) & res_90514_gender$padj < alpha]
+
+length(signif_90514)
+length(signif_90514_gender)
+length(intersect(signif_90514, signif_90514_gender))
+```
+
+## Dataset 2: LRRK2 / sporadic PD (GSE167529, 25 mM)
+
+### PCA quality check (Week 5: rlog + plotPCA)
+```{r}
+dds_pca_167529 <- DESeqDataSetFromMatrix(countData = round(gene_167529_25mM),
+                                         colData   = meta_167529_25mM,
+                                         design    = ~ condition)
+rld_167529 <- rlog(dds_pca_167529)
+
+p1_167529 <- plotPCA(rld_167529, intgroup = c("condition")) +
+  ggtitle("GSE167529 (25 mM) PCA: condition")
+p2_167529 <- plotPCA(rld_167529, intgroup = c("condition", "gender")) +
+  ggtitle("GSE167529 (25 mM) PCA: condition + gender")
+p3_167529 <- plotPCA(rld_167529, intgroup = c("condition", "batch")) +
+  ggtitle("GSE167529 (25 mM) PCA: condition + batch")
+p4_167529 <- plotPCA(rld_167529, intgroup = c("condition", "run")) +
+  ggtitle("GSE167529 (25 mM) PCA: condition + sequencing run")
+p5_167529 <- plotPCA(rld_167529, intgroup = c("condition", "age_group")) +
+  ggtitle("GSE167529 (25 mM) PCA: condition + age group")
+
+p1_167529
+p2_167529
+p3_167529
+p4_167529
+p5_167529
+```
+
+### DESeq2 without and with batch + gender + age (Week 5)
+```{r}
+dds_167529 <- DESeqDataSetFromMatrix(countData = gene_167529_filt,
+                                     colData   = meta_167529_25mM,
+                                     design    = ~ condition)
+dds_167529 <- DESeq(dds_167529)
+res_167529 <- res_to_df(results(dds_167529, contrast = c("condition", "PD", "Control")))
+
+dds_167529_adj <- DESeqDataSetFromMatrix(countData = gene_167529_filt,
+                                         colData   = meta_167529_25mM,
+                                         design    = ~ batch + gender + age_scaled + condition)
+dds_167529_adj <- DESeq(dds_167529_adj)
+res_167529_adj <- res_to_df(results(dds_167529_adj, contrast = c("condition", "PD", "Control")))
+```
+
+How many genes are significant, and how many are found by both models?
+```{r}
+signif_167529     <- res_167529$gene_id[!is.na(res_167529$padj) & res_167529$padj < alpha]
+signif_167529_adj <- res_167529_adj$gene_id[!is.na(res_167529_adj$padj) & res_167529_adj$padj < alpha]
+
+length(signif_167529)
+length(signif_167529_adj)
+length(intersect(signif_167529, signif_167529_adj))
+```
+
+## Summary of differentially expressed genes
+
+The adjusted models are used from here on.
+```{r}
+summarize_deg <- function(df, label) {
+  sig <- !is.na(df$padj) & df$padj < alpha
+  tibble(Model = label,
+         DEGs  = sum(sig),
+         Up    = sum(sig & df$log2FoldChange > 0),
+         Down  = sum(sig & df$log2FoldChange < 0),
+         DEGs_absLFC1 = sum(sig & abs(df$log2FoldChange) > 1))
+}
+
+deg_summary <- bind_rows(
+  summarize_deg(res_90514,        "GSE90514 ~ condition"),
+  summarize_deg(res_90514_gender, "GSE90514 ~ gender + condition"),
+  summarize_deg(res_167529,       "GSE167529 ~ condition"),
+  summarize_deg(res_167529_adj,   "GSE167529 ~ batch + gender + age + condition")
+)
+deg_summary
+```
+
+Top 10 genes per dataset.
+```{r}
+res_90514_gender %>% arrange(padj) %>%
+  dplyr::select(gene_id, symbol, baseMean, log2FoldChange, pvalue, padj) %>% head(10)
+
+res_167529_adj %>% arrange(padj) %>%
+  dplyr::select(gene_id, symbol, baseMean, log2FoldChange, pvalue, padj) %>% head(10)
+```
+
+Genes significant in both datasets.
+```{r}
+overlap_ids <- intersect(signif_90514_gender, signif_167529_adj)
+length(overlap_ids)
+
+inner_join(
+  res_90514_gender %>% filter(gene_id %in% overlap_ids) %>% dplyr::select(gene_id, symbol, log2FC_GSE90514 = log2FoldChange, padj_GSE90514 = padj),
+  res_167529_adj   %>% filter(gene_id %in% overlap_ids) %>% dplyr::select(gene_id, log2FC_GSE167529 = log2FoldChange, padj_GSE167529 = padj),
+  by = "gene_id")
+```
+
+Volcano plots.
+```{r}
+make_volcano <- function(df, title_txt) {
+  df %>%
+    filter(!is.na(padj)) %>%
+    mutate(sig = case_when(padj < alpha & abs(log2FoldChange) > 1 ~ "padj < 0.05 & |LFC| > 1",
+                           padj < alpha ~ "padj < 0.05",
+                           TRUE ~ "NS")) %>%
+    ggplot(aes(x = log2FoldChange, y = -log10(pvalue), color = sig)) +
+    geom_point(alpha = 0.6, size = 1.4) +
+    scale_color_manual(values = c("padj < 0.05 & |LFC| > 1" = "#D55E00",
+                                  "padj < 0.05" = "#0072B2", "NS" = "grey70")) +
+    geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "grey40") +
+    labs(x = "log2 fold change (PD vs Control)", y = "-log10(p-value)",
+         color = "Significance", title = title_txt) +
+    theme_bw()
+}
+
+v_90514  <- make_volcano(res_90514_gender, "GSE90514 (~ gender + condition)")
+v_167529 <- make_volcano(res_167529_adj,   "GSE167529 25 mM (~ batch + gender + age + condition)")
+v_90514
+v_167529
+```
+
+## FCS with fgsea (Week 5)
+
+Genes ranked by the DESeq2 `stat` value: positive = higher in PD, negative = higher in Control.
+```{r}
+make_stats <- function(df) {
+  myStats <- setNames(df$stat, df$gene_id)
+  myStats <- myStats[!is.na(myStats)]
+  sort(myStats, decreasing = TRUE)
+}
+
+stats_90514  <- make_stats(res_90514_gender)
+stats_167529 <- make_stats(res_167529_adj)
+
+set.seed(42)   # fgseaMultilevel uses random sampling
+fg_90514  <- fgseaMultilevel(pathways = BP_list, stats = stats_90514,
+                             minSize = 15, maxSize = 500, scoreType = "std")
+fg_167529 <- fgseaMultilevel(pathways = BP_list, stats = stats_167529,
+                             minSize = 15, maxSize = 500, scoreType = "std")
+```
+
+Number of significant gene sets and the top 10 per dataset.
+```{r}
+fg_sig_90514  <- fg_90514  %>% arrange(padj) %>% filter(padj < alpha)
+fg_sig_167529 <- fg_167529 %>% arrange(padj) %>% filter(padj < alpha)
+
+nrow(fg_sig_90514)
+nrow(fg_sig_167529)
+
+fg_sig_90514  %>% dplyr::select(pathway, NES, padj, size) %>% head(10)
+fg_sig_167529 %>% dplyr::select(pathway, NES, padj, size) %>% head(10)
+```
+
+Top gene set: enrichment plot and the first 3 leading-edge genes (Week 5).
+```{r}
+if (nrow(fg_sig_90514) > 0) {
+  print(plotEnrichment(BP_list[[fg_sig_90514$pathway[1]]], stats_90514) +
+          labs(title = paste0("GSE90514: ", fg_sig_90514$pathway[1])))
+  print(ens2sym[head(fg_sig_90514$leadingEdge[[1]], 3)])
+}
+
+if (nrow(fg_sig_167529) > 0) {
+  print(plotEnrichment(BP_list[[fg_sig_167529$pathway[1]]], stats_167529) +
+          labs(title = paste0("GSE167529: ", fg_sig_167529$pathway[1])))
+  print(ens2sym[head(fg_sig_167529$leadingEdge[[1]], 3)])
+}
+```
+
+## Comparison of the two datasets at gene-set level
+
+Gene sets significant in both datasets, and the Spearman correlation of NES.
+```{r}
+bp_comp <- inner_join(
+  fg_90514  %>% transmute(pathway, NES_GSE90514 = NES,  padj_GSE90514 = padj),
+  fg_167529 %>% transmute(pathway, NES_GSE167529 = NES, padj_GSE167529 = padj),
+  by = "pathway") %>%
+  arrange(pmin(padj_GSE90514, padj_GSE167529))
+
+sum(bp_comp$padj_GSE90514 < alpha & bp_comp$padj_GSE167529 < alpha, na.rm = TRUE)
+cor(bp_comp$NES_GSE90514, bp_comp$NES_GSE167529, method = "spearman", use = "complete.obs")
+```
+
+Top 15 gene sets in both datasets.
+```{r}
+top_names <- head(bp_comp$pathway, 15)
+
+bp_plot_df <- bind_rows(
+  fg_90514  %>% transmute(pathway, NES, padj, Dataset = "GSE90514"),
+  fg_167529 %>% transmute(pathway, NES, padj, Dataset = "GSE167529 (25 mM)")) %>%
+  filter(pathway %in% top_names) %>%
+  mutate(pathway = gsub("^GOBP_", "", pathway),
+         sig = ifelse(padj < alpha, "FDR < 0.05", "FDR >= 0.05"))
+
+p_bp <- ggplot(bp_plot_df, aes(x = Dataset, y = reorder(pathway, NES),
+                               color = NES, size = -log10(padj))) +
+  geom_point(aes(shape = sig)) +
+  scale_color_gradient2(low = "#2166AC", mid = "white", high = "#B2182B", midpoint = 0) +
+  scale_shape_manual(values = c("FDR < 0.05" = 16, "FDR >= 0.05" = 1)) +
+  labs(x = "", y = "", size = "-log10(FDR)", shape = "Significance",
+       title = "GO:BP FCS comparison (PD vs Control)") +
+  theme_bw()
+p_bp
+```
+
+## Save results
+
+PCA plots.
+```{r}
+pdf(file.path(results_dir, "04_qc_pca_plots.pdf"), width = 8, height = 5.5)
+print(p1_90514)
+print(p2_90514)
+print(p1_167529)
+print(p2_167529)
+print(p3_167529)
+print(p4_167529)
+print(p5_167529)
+dev.off()
+```
+
+Differential expression and FCS results.
+```{r}
+write.csv(deg_summary,      file.path(results_dir, "04_deg_summary.csv"),        row.names = FALSE)
+write.csv(res_90514_gender, file.path(results_dir, "04_GSE90514_dge_adjusted.csv"),       row.names = FALSE)
+write.csv(res_167529_adj,   file.path(results_dir, "04_GSE167529_dge_adjusted.csv"),      row.names = FALSE)
+
+save_fg <- function(fg, file) {
+  fg <- as.data.frame(fg)
+  fg$leadingEdge <- sapply(fg$leadingEdge, paste, collapse = ";")
+  write.csv(fg, file.path(results_dir, file), row.names = FALSE)
+}
+save_fg(fg_90514,  "04_GSE90514_fcs_go_bp.csv")
+save_fg(fg_167529, "04_GSE167529_fcs_go_bp.csv")
+write.csv(bp_comp, file.path(results_dir, "04_go_bp_cross_study.csv"), row.names = FALSE)
+
+pdf(file.path(results_dir, "04_dge_fcs_plots.pdf"), width = 8, height = 6)
+print(v_90514)
+print(v_167529)
+print(p_bp)
+dev.off()
+```
