@@ -3,6 +3,17 @@ title: "Data Loading"
 format: html
 ---
 
+# ----------- Virtual Pulldown ---------------------
+
+Loading inWeb PPI database
+```{r}
+# Load the InWeb PPI database.
+load(file='/home/projects/22140/exercise4.Rdata')
+```
+
+
+
+
 
 ```{r}
 # ==============================================================================
@@ -167,12 +178,4 @@ list.files(data_dir)
 ```
 
 
-
-# ----------- Virtual Pulldown ---------------------
-
-Loading inWeb PPI database
-```{r}
-# Load the InWeb PPI database.
-load(file='/home/projects/22140/exercise4.Rdata')
-```
 
