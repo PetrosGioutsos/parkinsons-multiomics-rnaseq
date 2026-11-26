@@ -159,9 +159,4 @@ sum(dxr_lrrk2$padj < 0.05, na.rm = TRUE)                               # 1,396
 length(unique(dxr_lrrk2$groupID[which(dxr_lrrk2$padj < 0.05)]))        # 1,140
 ```
 
-## Next steps (to do)
 
-- PRKN with gender as a confounder (`gender:exon` in both models)
-- Age, if the group decides to include it
-- Collapse isoforms to genes (`perGeneQValue`) + FCS
-- Compare DIU genes with Enrico's DGE genes, and PRKN with LRRK2
