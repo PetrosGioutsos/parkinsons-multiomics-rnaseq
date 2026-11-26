@@ -1,0 +1,167 @@
+---
+title: "Task 3: Differential Isoform Usage (DIU) + FCS"
+format: html
+---
+
+Library loading
+```{r}
+library(tidyverse)
+library(DESeq2)
+library(DEXSeq)
+```
+
+Paths are relative to this file (the `R/` folder), the same as in `01_virtual_pulldown.qmd`.
+```{r}
+data_dir    <- "../data/"
+results_dir <- "../results"
+dir.create(results_dir, showWarnings = FALSE, recursive = TRUE)
+```
+
+## Load data
+
+Isoform counts and metadata for both datasets. GSE167529 uses the 25 mM glucose samples only (21 samples, one per donor).
+```{r}
+iso_prkn   <- readRDS(paste0(data_dir, "GSE90514_iso_counts.rds"))
+meta_prkn  <- readRDS(paste0(data_dir, "GSE90514_meta.rds"))
+iso_lrrk2  <- readRDS(paste0(data_dir, "GSE167529_25mM_iso_counts.rds"))
+meta_lrrk2 <- readRDS(paste0(data_dir, "GSE167529_25mM_meta.rds"))
+```
+
+Isoform annotation (links each transcript to its gene). This file is not in the repo, so it keeps its full path on the server.
+```{r}
+isoInfo <- read_rds("/home/projects/22140/exam_data/Homo_sapiens.GRCh38.107.chr_patch_hapl_scaff_tx_info.Rds")
+```
+
+## Step 1: Filter isoforms
+
+Keep isoforms with at least 10 reads in at least as many samples as the smallest group has, and only keep genes with 2 or more isoforms (usage can only change when a gene has more than one isoform).
+```{r}
+filter_iso <- function(iso, min_samples, min_count = 10) {
+  keep <- rowSums(iso >= min_count) >= min_samples
+  iso  <- iso[keep, ]
+  info <- isoInfo[match(rownames(iso), isoInfo$transcript_id),
+                  c("transcript_id", "gene_id", "gene_name")]
+  found <- !is.na(info$gene_id)
+  iso  <- iso[found, ];  info <- info[found, ]
+  multi <- info$gene_id %in% info$gene_id[duplicated(info$gene_id)]
+  list(counts = iso[multi, ], info = info[multi, ])
+}
+```
+
+```{r}
+prkn_f  <- filter_iso(iso_prkn,  min_samples = 4)   # 74,905 isoforms, 13,134 genes
+lrrk2_f <- filter_iso(iso_lrrk2, min_samples = 9)   # 74,318 isoforms, 13,101 genes
+```
+
+## Dataset 1: PRKN (GSE90514)
+
+### Step 2: PCA (quality check)
+```{r}
+meta_prkn$condition <- factor(meta_prkn$condition, levels = c("Control", "PD"))
+all(colnames(prkn_f$counts) == rownames(meta_prkn))   # must be TRUE
+```
+
+```{r}
+dds_prkn <- DESeqDataSetFromMatrix(countData = round(as.matrix(prkn_f$counts)),
+                                   colData   = meta_prkn,
+                                   design    = ~ condition)
+rld_prkn <- rlog(dds_prkn)
+plotPCA(rld_prkn, intgroup = "condition")
+plotPCA(rld_prkn, intgroup = c("condition", "gender"))
+```
+
+### Step 3: Differential isoform usage (DEXSeq)
+
+Isoform rows and info rows must be in the same order.
+```{r}
+all(rownames(prkn_f$counts) == prkn_f$info$transcript_id)   # must be TRUE
+
+sample_prkn <- data.frame(row.names = colnames(prkn_f$counts),
+                          condition = meta_prkn$condition)
+```
+
+DEXSeq takes a long time, so the result is saved once and then re-loaded. To re-run it, delete the `.rds` file in `results/`.
+```{r}
+prkn_file <- file.path(results_dir, "03_GSE90514_dexseq.rds")
+
+if (file.exists(prkn_file)) {
+  dxr_prkn <- readRDS(prkn_file)
+} else {
+  dxd_prkn <- DEXSeqDataSet(countData  = round(as.matrix(prkn_f$counts)),
+                            sampleData = sample_prkn,
+                            design     = ~ sample + exon + condition:exon,
+                            featureID  = prkn_f$info$transcript_id,   # isoform
+                            groupID    = prkn_f$info$gene_id)         # gene
+
+  dxr_prkn <- DEXSeq(dxd_prkn,
+                     reducedModel = ~ sample + exon,   # drops condition:exon = usage test
+                     BPPARAM = BiocParallel::MulticoreParam(4))
+  saveRDS(dxr_prkn, prkn_file)
+}
+```
+
+How many significant isoforms, and in how many genes?
+```{r}
+sum(dxr_prkn$padj < 0.05, na.rm = TRUE)                                # 289
+length(unique(dxr_prkn$groupID[which(dxr_prkn$padj < 0.05)]))          # 253
+```
+
+## Dataset 2: LRRK2 / sporadic PD (GSE167529, 25 mM)
+
+### Step 2: PCA (quality check)
+```{r}
+meta_lrrk2$condition <- factor(meta_lrrk2$condition, levels = c("Control", "PD"))
+meta_lrrk2$batch     <- factor(meta_lrrk2$batch)
+all(colnames(lrrk2_f$counts) == rownames(meta_lrrk2))   # must be TRUE
+```
+
+```{r}
+dds_lrrk2 <- DESeqDataSetFromMatrix(countData = round(as.matrix(lrrk2_f$counts)),
+                                    colData   = meta_lrrk2,
+                                    design    = ~ condition)
+rld_lrrk2 <- rlog(dds_lrrk2)
+plotPCA(rld_lrrk2, intgroup = "condition")
+plotPCA(rld_lrrk2, intgroup = c("condition", "gender"))
+plotPCA(rld_lrrk2, intgroup = c("condition", "batch"))   # PC1 (66%) splits by batch -> correct for batch
+```
+
+### Step 3: Differential isoform usage (DEXSeq), corrected for batch + gender
+```{r}
+all(rownames(lrrk2_f$counts) == lrrk2_f$info$transcript_id)   # must be TRUE
+
+sample_lrrk2 <- data.frame(row.names = colnames(lrrk2_f$counts),
+                           condition = meta_lrrk2$condition,
+                           gender    = meta_lrrk2$gender,
+                           batch     = meta_lrrk2$batch)
+```
+
+```{r}
+lrrk2_file <- file.path(results_dir, "03_GSE167529_dexseq.rds")
+
+if (file.exists(lrrk2_file)) {
+  dxr_lrrk2 <- readRDS(lrrk2_file)
+} else {
+  dxd_lrrk2 <- DEXSeqDataSet(countData  = round(as.matrix(lrrk2_f$counts)),
+                             sampleData = sample_lrrk2,
+                             design     = ~ sample + exon + batch:exon + gender:exon + condition:exon,
+                             featureID  = lrrk2_f$info$transcript_id,   # isoform
+                             groupID    = lrrk2_f$info$gene_id)         # gene
+
+  dxr_lrrk2 <- DEXSeq(dxd_lrrk2,
+                      reducedModel = ~ sample + exon + batch:exon + gender:exon,   # usage test, corrected for batch + gender
+                      BPPARAM = BiocParallel::MulticoreParam(4))
+  saveRDS(dxr_lrrk2, lrrk2_file)
+}
+```
+
+```{r}
+sum(dxr_lrrk2$padj < 0.05, na.rm = TRUE)                               # 1,396
+length(unique(dxr_lrrk2$groupID[which(dxr_lrrk2$padj < 0.05)]))        # 1,140
+```
+
+## Next steps (to do)
+
+- PRKN with gender as a confounder (`gender:exon` in both models)
+- Age, if the group decides to include it
+- Collapse isoforms to genes (`perGeneQValue`) + FCS
+- Compare DIU genes with Enrico's DGE genes, and PRKN with LRRK2
