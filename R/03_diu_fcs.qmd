@@ -83,6 +83,42 @@ sum(dxr_prkn$padj < 0.05, na.rm = TRUE)                                # 289
 length(unique(dxr_prkn$groupID[which(dxr_prkn$padj < 0.05)]))          # 253
 ```
 
+### Step 3b: DEXSeq corrected for gender
+
+Same test as above, but gender is added to both models so that differences between males and females are not mistaken for PD effects (the same correction as in dataset 2).
+```{r}
+sample_prkn$gender <- factor(meta_prkn$gender)
+table(sample_prkn$condition, sample_prkn$gender)   # check the design is balanced
+```
+
+```{r}
+prkn_g_file <- file.path(results_dir, "03_GSE90514_dexseq_gender.rds")
+
+if (file.exists(prkn_g_file)) {
+  dxr_prkn_g <- readRDS(prkn_g_file)
+} else {
+  dxd_prkn_g <- DEXSeqDataSet(countData  = round(as.matrix(prkn_f$counts)),
+                              sampleData = sample_prkn,
+                              design     = ~ sample + exon + gender:exon + condition:exon,
+                              featureID  = prkn_f$info$transcript_id,   # isoform
+                              groupID    = prkn_f$info$gene_id)         # gene
+
+  dxr_prkn_g <- DEXSeq(dxd_prkn_g,
+                       reducedModel = ~ sample + exon + gender:exon,   # usage test, corrected for gender
+                       BPPARAM = BiocParallel::MulticoreParam(4))
+  saveRDS(dxr_prkn_g, prkn_g_file)
+}
+```
+
+How many significant isoforms and genes with the gender correction, and how many genes are found by both models?
+```{r}
+sum(dxr_prkn_g$padj < 0.05, na.rm = TRUE)
+genes_prkn   <- unique(dxr_prkn$groupID[which(dxr_prkn$padj < 0.05)])
+genes_prkn_g <- unique(dxr_prkn_g$groupID[which(dxr_prkn_g$padj < 0.05)])
+length(genes_prkn_g)
+length(intersect(genes_prkn, genes_prkn_g))
+```
+
 ## Dataset 2: LRRK2 / sporadic PD (GSE167529, 25 mM)
 
 ### Step 2: PCA (quality check)
