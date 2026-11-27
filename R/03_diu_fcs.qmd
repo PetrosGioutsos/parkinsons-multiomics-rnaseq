@@ -171,3 +171,147 @@ length(unique(dxr_lrrk2$groupID[which(dxr_lrrk2$padj < 0.05)]))        # 1,140
 ```
 
 
+
+## Step 4: Collapse isoforms to gene level (Week 6)
+
+For each gene, keep only the isoform with the smallest p-value, then re-adjust the p-values across genes. The PRKN model corrected for gender is used.
+```{r}
+library(fgsea)
+library(msigdbr)
+alpha <- 0.05
+
+collapse_to_gene <- function(dxr) {
+  dxr %>%
+    as.data.frame() %>%
+    as_tibble() %>%
+    filter(!is.na(stat)) %>%
+    dplyr::select(gene_id = groupID, isoform_id = featureID, stat,
+                  log2FC = starts_with("log2fold"), pvalue, padj) %>%
+    group_by(gene_id) %>%
+    slice_min(order_by = pvalue, n = 1, with_ties = FALSE) %>%
+    ungroup() %>%
+    mutate(padj = p.adjust(pvalue, method = "fdr"),
+           gene_id = sub("\\.\\d+$", "", gene_id))
+}
+
+dex_gene_prkn  <- collapse_to_gene(dxr_prkn_g)
+dex_gene_lrrk2 <- collapse_to_gene(dxr_lrrk2)
+
+sum(dex_gene_prkn$padj  < alpha)   # significant DIU genes, PRKN
+sum(dex_gene_lrrk2$padj < alpha)   # significant DIU genes, LRRK2
+
+write.csv(dex_gene_prkn,  file.path(results_dir, "03_GSE90514_diu_gene_level.csv"),  row.names = FALSE)
+write.csv(dex_gene_lrrk2, file.path(results_dir, "03_GSE167529_diu_gene_level.csv"), row.names = FALSE)
+```
+
+## Step 5: Compare DIU with DGE at gene level (Week 6)
+
+DGE results from task 2. Fisher's exact test checks whether more genes are significant in both analyses than expected by chance. Only genes tested in both analyses are used.
+```{r}
+deseq_prkn  <- read.csv(file.path(results_dir, "04_GSE90514_dge_adjusted.csv"))
+deseq_lrrk2 <- read.csv(file.path(results_dir, "04_GSE167529_dge_adjusted.csv"))
+
+compare_dex_deseq <- function(dex_gene, deseq_gene) {
+  inner_join(dex_gene   %>% transmute(gene_id, DEXSeq = !is.na(padj) & padj < alpha),
+             deseq_gene %>% transmute(gene_id, DESeq2 = !is.na(padj) & padj < alpha),
+             by = "gene_id") %>%
+    with(table(DEXSeq, DESeq2))
+}
+```
+
+```{r}
+contig_prkn <- compare_dex_deseq(dex_gene_prkn, deseq_prkn)
+contig_prkn
+fisher.test(contig_prkn, alternative = "greater")
+```
+
+```{r}
+contig_lrrk2 <- compare_dex_deseq(dex_gene_lrrk2, deseq_lrrk2)
+contig_lrrk2
+fisher.test(contig_lrrk2, alternative = "greater")
+```
+
+## Step 6: FCS and comparison with DGE at gene-set level (Week 6)
+
+GO:BP gene sets; genes ranked by the DEXSeq stat value.
+```{r}
+BP_df   <- msigdbr(species = "Homo sapiens", category = "C5", subcategory = "GO:BP")
+BP_list <- split(BP_df$ensembl_gene, BP_df$gs_name)
+
+make_ranks <- function(df) {
+  stats <- setNames(df$stat, df$gene_id)
+  stats <- stats[!is.na(stats)]
+  sort(stats, decreasing = TRUE)
+}
+```
+
+```{r}
+set.seed(42)
+fg_dex_prkn    <- fgseaMultilevel(pathways = BP_list, stats = make_ranks(dex_gene_prkn),
+                                  minSize = 15, maxSize = 500, scoreType = "std")
+fg_deseq_prkn  <- fgseaMultilevel(pathways = BP_list, stats = make_ranks(deseq_prkn),
+                                  minSize = 15, maxSize = 500, scoreType = "std")
+fg_dex_lrrk2   <- fgseaMultilevel(pathways = BP_list, stats = make_ranks(dex_gene_lrrk2),
+                                  minSize = 15, maxSize = 500, scoreType = "std")
+fg_deseq_lrrk2 <- fgseaMultilevel(pathways = BP_list, stats = make_ranks(deseq_lrrk2),
+                                  minSize = 15, maxSize = 500, scoreType = "std")
+
+sum(fg_dex_prkn$padj  < alpha, na.rm = TRUE)   # significant gene sets, DIU PRKN
+sum(fg_dex_lrrk2$padj < alpha, na.rm = TRUE)   # significant gene sets, DIU LRRK2
+```
+
+How many gene sets are significant in DIU, DGE or both, and how well do the NES values agree?
+```{r}
+compare_sets <- function(fg_deseq, fg_dex) {
+  inner_join(fg_deseq %>% transmute(pathway, NES_de = NES, padj_de = padj),
+             fg_dex   %>% transmute(pathway, NES_dx = NES, padj_dx = padj),
+             by = "pathway") %>%
+    mutate(sig_cat = case_when(
+      padj_de < alpha & padj_dx < alpha  ~ "Both",
+      padj_de < alpha & padj_dx >= alpha ~ "DESeq2 only",
+      padj_de >= alpha & padj_dx < alpha ~ "DEXSeq only",
+      TRUE ~ "None"),
+      sig_cat = factor(sig_cat, levels = c("Both", "DESeq2 only", "DEXSeq only", "None")))
+}
+
+cmp_prkn  <- compare_sets(fg_deseq_prkn,  fg_dex_prkn)
+cmp_lrrk2 <- compare_sets(fg_deseq_lrrk2, fg_dex_lrrk2)
+
+table(cmp_prkn$sig_cat)
+table(cmp_lrrk2$sig_cat)
+
+cor(cmp_prkn$NES_de,  cmp_prkn$NES_dx,  method = "spearman", use = "complete.obs")
+cor(cmp_lrrk2$NES_de, cmp_lrrk2$NES_dx, method = "spearman", use = "complete.obs")
+```
+
+```{r}
+plot_nes <- function(cmp, title_txt) {
+  ggplot(cmp, aes(x = NES_de, y = NES_dx, color = sig_cat)) +
+    geom_point(alpha = 0.8) +
+    geom_smooth(method = "lm", se = FALSE) +
+    labs(x = "NES (DESeq2 fgsea)", y = "NES (DEXSeq fgsea)", color = "Significance",
+         title = title_txt) +
+    theme_minimal()
+}
+
+p_nes_prkn  <- plot_nes(cmp_prkn,  "PRKN (GSE90514): NES DGE vs DIU")
+p_nes_lrrk2 <- plot_nes(cmp_lrrk2, "LRRK2/sporadic (GSE167529): NES DGE vs DIU")
+p_nes_prkn
+p_nes_lrrk2
+```
+
+Save the gene-set results and plots.
+```{r}
+save_fg <- function(fg, file) {
+  fg <- as.data.frame(fg)
+  fg$leadingEdge <- sapply(fg$leadingEdge, paste, collapse = ";")
+  write.csv(fg, file.path(results_dir, file), row.names = FALSE)
+}
+save_fg(fg_dex_prkn,  "03_GSE90514_diu_fcs_go_bp.csv")
+save_fg(fg_dex_lrrk2, "03_GSE167529_diu_fcs_go_bp.csv")
+
+pdf(file.path(results_dir, "03_diu_vs_dge_nes_plots.pdf"), width = 8, height = 6)
+print(p_nes_prkn)
+print(p_nes_lrrk2)
+dev.off()
+```
