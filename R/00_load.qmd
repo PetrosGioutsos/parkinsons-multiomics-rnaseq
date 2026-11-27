@@ -137,8 +137,11 @@ aad_lookup <- c(
 )
 
 extract_donor <- function(titles) {
-  inside <- sub(".*\\(([^)]+)\\).*", "\\1", titles)
-  trimws(gsub("\\s+(high|low)$", "", inside, ignore.case = TRUE))
+  x <- sub("^[^(]*\\(", "", titles)                    # drop everything up to "("
+  x <- sub("\\).*$", "", x)                            # drop ")" and anything after (if present)
+  x <- trimws(x)
+  x <- sub("[_[:space:]]+(high|low)$", "", x, ignore.case = TRUE)  # drop "_low", " high", etc.
+  sub("^FOX(\\d)", "FOX-\\1", x)                       # FOX073-001 -> FOX-073-001
 }
 
 meta_167529$donor_id   <- extract_donor(meta_167529$title)
