@@ -138,14 +138,15 @@ plotPCA(rld_lrrk2, intgroup = c("condition", "gender"))
 plotPCA(rld_lrrk2, intgroup = c("condition", "batch"))   # PC1 (66%) splits by batch -> correct for batch
 ```
 
-### Step 3: Differential isoform usage (DEXSeq), corrected for batch + gender
+#### Step 3: Differential isoform usage (DEXSeq), corrected for batch + gender + age
 ```{r}
 all(rownames(lrrk2_f$counts) == lrrk2_f$info$transcript_id)   # must be TRUE
 
 sample_lrrk2 <- data.frame(row.names = colnames(lrrk2_f$counts),
                            condition = meta_lrrk2$condition,
                            gender    = meta_lrrk2$gender,
-                           batch     = meta_lrrk2$batch)
+                           batch     = meta_lrrk2$batch,
+                           age       = meta_lrrk2$age_scaled)
 ```
 
 ```{r}
@@ -154,20 +155,20 @@ if (file.exists(lrrk2_file)) {
 } else {
   dxd_lrrk2 <- DEXSeqDataSet(countData  = round(as.matrix(lrrk2_f$counts)),
                              sampleData = sample_lrrk2,
-                             design     = ~ sample + exon + batch:exon + gender:exon + condition:exon,
+                             design     = ~ sample + exon + batch:exon + gender:exon + age:exon + condition:exon,
                              featureID  = lrrk2_f$info$transcript_id,   # isoform
                              groupID    = lrrk2_f$info$gene_id)         # gene
 
   dxr_lrrk2 <- DEXSeq(dxd_lrrk2,
-                      reducedModel = ~ sample + exon + batch:exon + gender:exon,   # usage test, corrected for batch + gender
+                             reducedModel = ~ sample + exon + batch:exon + gender:exon + age:exon,   # usage test, corrected for batch + gender + age
                       BPPARAM = BiocParallel::MulticoreParam(4))
   saveRDS(dxr_lrrk2, lrrk2_file)
 }
 ```
 
 ```{r}
-sum(dxr_lrrk2$padj < 0.05, na.rm = TRUE)                               # 1,396
-length(unique(dxr_lrrk2$groupID[which(dxr_lrrk2$padj < 0.05)]))        # 1,140
+sum(dxr_lrrk2$padj < 0.05, na.rm = TRUE)                               
+length(unique(dxr_lrrk2$groupID[which(dxr_lrrk2$padj < 0.05)]))        
 ```
 
 
